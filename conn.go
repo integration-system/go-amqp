@@ -156,6 +156,14 @@ func ConnContainerID(id string) ConnOption {
 	}
 }
 
+// ConnOnUnexpectedDisconnect sets a callback for a call when the connection is closed by unknown reason.
+func ConnOnUnexpectedDisconnect(callback func(error)) ConnOption {
+	return func(c *conn) error {
+		c.onUnexpectedDisconnect = callback
+		return nil
+	}
+}
+
 // conn is an AMQP connection.
 type conn struct {
 	net            net.Conn      // underlying connection
@@ -188,11 +196,12 @@ type conn struct {
 	done  chan struct{} // indicates the connection is done
 
 	// mux
-	newSession   chan newSessionResp // new Sessions are requested from mux by reading off this channel
-	delSession   chan *Session       // session completion is indicated to mux by sending the Session on this channel
-	connErr      chan error          // connReader/Writer notifications of an error
-	closeMux     chan struct{}       // indicates that the mux should stop
-	closeMuxOnce sync.Once
+	newSession             chan newSessionResp // new Sessions are requested from mux by reading off this channel
+	delSession             chan *Session       // session completion is indicated to mux by sending the Session on this channel
+	connErr                chan error          // connReader/Writer notifications of an error
+	closeMux               chan struct{}       // indicates that the mux should stop
+	closeMuxOnce           sync.Once
+	onUnexpectedDisconnect func(error) // called when connection closed not by Client.Close()
 
 	// connReader
 	rxProto       chan protoHeader // protoHeaders received by connReader
@@ -309,6 +318,10 @@ func (c *conn) close() {
 	// check rxDone after closing net, otherwise may block
 	// for up to c.idleTimeout
 	<-c.rxDone
+
+	if c.err != nil && c.err != ErrConnClosed && c.onUnexpectedDisconnect != nil {
+		c.onUnexpectedDisconnect(c.err)
+	}
 }
 
 // getErr returns conn.err.
